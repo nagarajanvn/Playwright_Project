@@ -28,7 +28,7 @@ if __name__ == "__main__":
     test_get_objects_api()
 
 def test_get_object_13_api():
-    url = "https://api.restful-api.dev/objects/ff8081819ff5b110019ffbe8825b13ae"
+    url = "https://api.restful-api.dev/objects/13"
     resp = requests.get(url, timeout=10)
 
     # Verify status code
@@ -50,7 +50,7 @@ def test_get_object_13_api():
         assert data["message"], "The 'message' field is empty"
         print("API message:", data["message"])
     elif isinstance(data, dict) and "id" in data:
-        assert str(data["id"]) == "ff8081819ff5b110019ffbe8825b13ae", f"Expected id 'ff8081819ff5b110019ffbe8825b13ae', got {data['id']}"
+        assert str(data["id"]) == "13", f"Expected id '13', got {data['id']}"
         print("Object name:", data.get("name"))
     else:
         print("Unexpected response format:", data)
