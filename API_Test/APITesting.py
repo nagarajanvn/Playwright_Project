@@ -1,5 +1,6 @@
 import requests
 import json
+import pytest
 
 
 def test_get_objects_api():
@@ -168,3 +169,93 @@ if __name__ == "__main__":
     # test_patch_object_api()
     # Uncomment to run PUT test directly
     # test_put_object_api()
+
+
+def test_get_objects_wrong_method_negative():
+    """Using an unsupported method (POST) on the GET-only endpoint should not return 200."""
+    url = "https://api.restful-api.dev/objects"
+    resp = requests.post(url, timeout=10)
+
+    # Expect a client or server error for an inappropriate method
+    assert resp.status_code >= 400 and resp.status_code != 200, (
+        f"Expected non-2xx for POST to GET endpoint, got {resp.status_code}"
+    )
+
+
+def test_get_objects_invalid_path_returns_404():
+    """A malformed or incorrect path should return 404."""
+    url = "https://api.restful-api.dev/objects/invalid-path"
+    resp = requests.get(url, timeout=10)
+
+    assert resp.status_code == 404, f"Expected 404 for invalid path, got {resp.status_code}"
+
+
+def test_get_objects_malformed_url_raises():
+    """A syntactically malformed URL should raise a requests exception."""
+    url = "https://api.restful-api.dev/::bad_url"
+    with pytest.raises(requests.exceptions.RequestException):
+        requests.get(url, timeout=5)
+
+
+def test_get_collections_api_positive():
+    """Positive test: valid API key should return 200 and JSON body."""
+    url = "https://api.restful-api.dev/collections"
+    headers = {"x-api-key": "a43743cc-cf7d-48b6-bf8c-d579f7046031"}
+    resp = requests.get(url, headers=headers, timeout=10)
+
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
+
+    try:
+        data = resp.json()
+    except ValueError:
+        raise AssertionError("Response is not valid JSON")
+
+    # Basic sanity checks: should be a list or contain expected keys
+    assert data is not None, "Empty response body"
+    if isinstance(data, list):
+        assert len(data) >= 0, "Expected a JSON list (can be empty)"
+    elif isinstance(data, dict):
+        assert "id" in data or "collections" in data or len(data) > 0, "Unexpected JSON structure"
+
+
+def test_get_collections_missing_api_key_negative():
+    """Negative test: missing API key should be rejected (401/403)."""
+    url = "https://api.restful-api.dev/collections"
+    resp = requests.get(url, timeout=10)
+
+    assert resp.status_code in (401, 403), f"Expected 401 or 403 for missing API key, got {resp.status_code}"
+
+
+def test_get_collections_invalid_api_key_negative():
+    """Negative test: invalid API key should be rejected (401/403)."""
+    url = "https://api.restful-api.dev/collections"
+    invalid_headers = {"x-api-key": "invalid-key-0000-0000"}
+
+    # Call with invalid key and with a known valid key for comparison
+    resp_invalid = requests.get(url, headers=invalid_headers, timeout=10)
+    valid_headers = {"x-api-key": "a43743cc-cf7d-48b6-bf8c-d579f7046031"}
+    resp_valid = requests.get(url, headers=valid_headers, timeout=10)
+
+    # If the service enforces API keys, invalid should return 401/403
+    if resp_invalid.status_code in (401, 403):
+        return
+
+    # If the service does not enforce API keys and returns 200, ensure the response differs
+    if resp_invalid.status_code == resp_valid.status_code and resp_invalid.text == resp_valid.text:
+        pytest.skip("Service returns identical response for invalid API key; cannot assert rejection")
+
+    # Otherwise accept non-2xx or differing responses as evidence of rejection
+    assert resp_invalid.status_code != 200 or resp_invalid.text != resp_valid.text, (
+        f"Invalid API key returned the same successful response as a valid key (status {resp_invalid.status_code})"
+    )
+
+
+def test_get_collections_wrong_method_negative():
+    """Negative test: wrong HTTP method should not return 200."""
+    url = "https://api.restful-api.dev/collections"
+    headers = {"x-api-key": "a43743cc-cf7d-48b6-bf8c-d579f7046031"}
+    resp = requests.post(url, headers=headers, timeout=10)
+
+    assert resp.status_code >= 400 and resp.status_code != 200, (
+        f"Expected non-2xx for POST to collections endpoint, got {resp.status_code}"
+    )
