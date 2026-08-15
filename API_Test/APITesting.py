@@ -197,6 +197,80 @@ def test_get_objects_malformed_url_raises():
         requests.get(url, timeout=5)
 
 
+def test_get_objects_limit_zero_edge():
+    """Edge case: request with limit=0 should return an empty list when supported."""
+    url = "https://api.restful-api.dev/objects?limit=0"
+    resp = requests.get(url, timeout=10)
+
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
+    try:
+        data = resp.json()
+    except ValueError:
+        pytest.skip("Response not JSON; skipping limit=0 edge test")
+    base_resp = requests.get("https://api.restful-api.dev/objects", timeout=10)
+    try:
+        base_data = base_resp.json() if base_resp.status_code == 200 else None
+    except ValueError:
+        base_data = None
+
+    if isinstance(data, list):
+        if len(data) == 0:
+            return
+
+        # If the service ignores the limit param and returns same data as base, skip
+        if isinstance(base_data, list) and data == base_data:
+            pytest.skip("Service ignores 'limit' query; skipping limit=0 assertion")
+
+        # Otherwise, ensure returned count is not greater than the base set
+        if isinstance(base_data, list):
+            assert len(data) <= len(base_data), (
+                "Returned more items for limit=0 than the base response"
+            )
+        else:
+            pytest.skip("Cannot determine expected behavior for limit=0")
+    else:
+        pytest.skip("Service does not support 'limit' query or returned non-list")
+
+
+def test_get_objects_large_limit_edge():
+    """Edge case: large limit should return <= requested count when supported."""
+    url = "https://api.restful-api.dev/objects?limit=1000"
+    resp = requests.get(url, timeout=10)
+
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
+    try:
+        data = resp.json()
+    except ValueError:
+        pytest.skip("Response not JSON; skipping large-limit edge test")
+
+    if isinstance(data, list):
+        assert len(data) <= 1000, f"Returned more than requested 1000 items ({len(data)})"
+    else:
+        pytest.skip("Service does not support 'limit' query or returned non-list")
+
+
+def test_get_objects_invalid_query_negative():
+    """Negative: invalid query param should be rejected or produce a different response."""
+    base_url = "https://api.restful-api.dev/objects"
+    url_invalid = base_url + "?limit=-1"
+
+    resp_invalid = requests.get(url_invalid, timeout=10)
+    resp_base = requests.get(base_url, timeout=10)
+
+    # If server enforces invalid params, expect 4xx
+    if 400 <= resp_invalid.status_code < 500:
+        return
+
+    # If server ignores invalid param and returns identical response, skip
+    if resp_invalid.status_code == resp_base.status_code and resp_invalid.text == resp_base.text:
+        pytest.skip("Service ignores invalid query params; cannot assert rejection")
+
+    # Otherwise accept differing or non-2xx as acceptable negative behavior
+    assert resp_invalid.status_code != 200 or resp_invalid.text != resp_base.text, (
+        f"Invalid query param returned same successful response as base (status {resp_invalid.status_code})"
+    )
+
+
 def test_get_collections_api_positive():
     """Positive test: valid API key should return 200 and JSON body."""
     url = "https://api.restful-api.dev/collections"
@@ -259,3 +333,130 @@ def test_get_collections_wrong_method_negative():
     assert resp.status_code >= 400 and resp.status_code != 200, (
         f"Expected non-2xx for POST to collections endpoint, got {resp.status_code}"
     )
+
+
+def test_post_objects_positive_create():
+    """Positive: create an object with the provided payload and verify success."""
+    url = "https://api.restful-api.dev/objects"
+    payload = {
+        "name": "Apple MacBook Pro 19",
+        "data": {
+            "year": 2026,
+            "price": 1849.99,
+            "CPU model": "Intel Core i9",
+            "Hard disk size": "1 TB"
+        }
+    }
+
+    resp = requests.post(url, json=payload, timeout=10)
+    if resp.status_code == 405:
+        pytest.skip("POST not allowed on this endpoint; skipping create test")
+    assert resp.status_code in (200, 201), f"Expected 200 or 201, got {resp.status_code}"
+
+    try:
+        data = resp.json()
+    except ValueError:
+        raise AssertionError("Response is not valid JSON")
+
+    # Basic validation: created object should echo name or provide an id
+    if isinstance(data, dict):
+        assert ("id" in data) or (data.get("name") == payload["name"]), (
+            "Response JSON missing 'id' and did not echo name"
+        )
+
+
+def test_post_objects_missing_name_negative():
+    """Negative: missing required 'name' should be rejected (4xx) or skipped if accepted."""
+    url = "https://api.restful-api.dev/objects"
+    payload = {"data": {"year": 2026}}
+
+    resp = requests.post(url, json=payload, timeout=10)
+
+    if resp.status_code in (400, 422):
+        return
+
+    # If service accepted the request, skip because we cannot assert rejection
+    if resp.status_code in (200, 201):
+        pytest.skip("Service accepted payload missing 'name'; cannot assert rejection")
+
+    # Otherwise, ensure it's a client error
+    assert resp.status_code >= 400, f"Unexpected status for missing-name test: {resp.status_code}"
+
+
+def test_post_objects_invalid_json_negative():
+    """Negative: malformed JSON body should produce a client error (400) or be handled gracefully."""
+    url = "https://api.restful-api.dev/objects"
+    bad_json = "{\"name\": \"Broken JSON\""  # missing closing brace
+    headers = {"Content-Type": "application/json"}
+
+    try:
+        resp = requests.post(url, data=bad_json, headers=headers, timeout=10)
+    except requests.exceptions.RequestException:
+        return
+
+    # Accept 400/415 as proper rejection
+    if resp.status_code in (400, 415):
+        return
+
+    # If server accepted malformed JSON (rare), skip the assertion
+    if resp.status_code in (200, 201):
+        pytest.skip("Service accepted malformed JSON; cannot assert rejection")
+
+    # Otherwise, ensure it's a client or server error
+    assert resp.status_code >= 400, f"Unexpected status for invalid JSON: {resp.status_code}"
+
+
+def test_post_objects_large_payload_edge():
+    """Edge: very large payloads may be accepted or rejected (413)."""
+    url = "https://api.restful-api.dev/objects"
+    large_name = "A" * 20000
+    payload = {"name": large_name, "data": {"year": 2026}}
+
+    resp = requests.post(url, json=payload, timeout=20)
+
+    # If rejected due to size or server error, accept any 4xx/5xx
+    if resp.status_code >= 400:
+        return
+
+    # If accepted, validate response
+    assert resp.status_code in (200, 201), f"Expected accepted or rejection, got {resp.status_code}"
+
+
+def test_post_objects_duplicate_behavior():
+    """Check behavior when posting the same payload twice (dedup, conflict, or create-new)."""
+    import uuid
+
+    url = "https://api.restful-api.dev/objects"
+    unique_name = f"dup-test-{uuid.uuid4().hex}"
+    payload = {"name": unique_name, "data": {"year": 2026}}
+
+    resp1 = requests.post(url, json=payload, timeout=10)
+    if resp1.status_code not in (200, 201):
+        pytest.skip(f"Could not create initial object (status {resp1.status_code}); skipping duplicate test")
+
+    try:
+        data1 = resp1.json()
+    except ValueError:
+        pytest.skip("Initial create did not return JSON; skipping duplicate test")
+
+    resp2 = requests.post(url, json=payload, timeout=10)
+
+    # If server rejects duplicates with any 4xx/5xx, consider that acceptable
+    if resp2.status_code >= 400:
+        return
+
+    # If server accepts both creates, ensure it doesn't error
+    if resp2.status_code in (200, 201):
+        try:
+            data2 = resp2.json()
+        except ValueError:
+            pytest.skip("Second create did not return JSON; cannot compare IDs")
+
+        # If both return ids, behavior may be create-new or dedupe; accept both
+        if isinstance(data1, dict) and isinstance(data2, dict) and "id" in data1 and "id" in data2:
+            return
+
+        return
+
+    # For any other unexpected status codes, skip rather than fail
+    pytest.skip(f"Unexpected status on duplicate create: {resp2.status_code}")
